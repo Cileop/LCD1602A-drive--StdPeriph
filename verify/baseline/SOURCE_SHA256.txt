@@ -1,0 +1,9 @@
+﻿# Baseline extracted from git HEAD (commit 0d8444f) - read-only from git, not from the Lead's working tree
+# format: repo-path  git-blob-at-HEAD  sha256-of-copy  lines
+mokuai/MyPCF8574.c  d3895dbd25a29c63b30174c16413b6632bdcb0bf  sha256=1d4b39f75efeaf0b29dad10436bbbc2862a2d1aa2f9d5bb2bd101871bb3bfbbe  lines=190  blobmatch=True
+mokuai/MyPCF8574.h  057798cd9a1b208560ede9c8a1459836a0ab12ae  sha256=a389da9cee0fd2bd83e67f6692eee483a87a614db41cd6f678313aec11f8336c  lines=16  blobmatch=True
+mokuai/MyLCD1602A.c  1adf19a8c5265a9814b61c820db5e303f8e71d80  sha256=9bc43d087a4d967657638f2260d5d3b3b0462ecb15bb8fc0548c7aa7be655275  lines=94  blobmatch=True
+mokuai/MyLCD1602A.h  34b52b00027efbc4293d7341e7abd4ea903a0b8e  sha256=972f51270235f338e8e37b43ce7a79c8d6caad71ef4f5b4b8b61b2f3598e14ab  lines=6  blobmatch=True
+system/Delay.c  009ba2f04f42e322da4d8cdfa7f9795ae70871e0  sha256=8eee7a01069a038eeded22bf45a750b86c13d541db7f1451fa70db8c27847095  lines=31  blobmatch=True
+system/Delay.h  cef7c3c0e9176e6f54a4467d559bf0357ef4933a  sha256=ffa1607d7514f006a7a94f17d8a15b3bdb20cd6ca8cd081b4de41526ca45c4ef  lines=6  blobmatch=True
+User/main.c  4e8c468fdf988db2ad4fe7fc19c7d5aa1d063de7  sha256=4e457a196dc61e9c5cdae62e789e0fc1dbbf75faad5d9df33737fd6cd05c7264  lines=40  blobmatch=True

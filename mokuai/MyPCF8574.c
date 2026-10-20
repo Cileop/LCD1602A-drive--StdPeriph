@@ -1,253 +1,299 @@
-#include "stm32f10x.h"                  // Device header
-//#include "stm32f10x_i2c.h"
+#include "stm32f10x.h"
 #include "stm32f10x_gpio.h"
+#include "stm32f10x_rcc.h"
 #include "Delay.h"
-void MyPCF8574_I2C_Init(void)   //IO口及I2C的初始化
-{   //RCC_APB1PeriphClockCmd(RCC_APB1Periph_I2C1,ENABLE);   硬件I2C1
-	
-	//RCC_APB2Periph_GPIOB             ((uint32_t)0x00000008)
-	//RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB,ENABLE);
-RCC->APB2ENR |=0x00000008;        //开启GPIOB的时钟
-	//
-	/*
-	GPIO_InitTypeDef GPIO_I2C_InitStruct;
-	GPIO_I2C_InitStruct.GPIO_Mode=GPIO_Mode_Out_OD;
-	GPIO_I2C_InitStruct.GPIO_Pin=GPIO_Pin_6 | GPIO_Pin_7;
-	GPIO_I2C_InitStruct.GPIO_Speed=GPIO_Speed_50MHz;
-	GPIO_Init(GPIOB,&GPIO_I2C_InitStruct);
-	*/
-	//Mode:OUT_OD  ;  speed:50MHz
-	//GPIOB GPIO_6         0x07000000
-	//GPIOB GPIO_7         0x70000000
-	//GPIOB GPIO_6-7         0x77000000
-GPIO_TypeDef* GPIOx =GPIOB;
-GPIOx->CRL = 0x77000000;
-	//以后像此处这样只是为了速度,可能出错了编译器都不知道那里出错
+#include "MyPCF8574.h"
 
-}
+/* ============================================================================
+ *  软件 I2C + PCF8574 输出驱动
+ *
+ *  相比原来的写法, 这里修掉的问题:
+ *   1) 原来直接写 GPIOB->CRL = 0x77000000, 会顺手把 PB0~PB5 的配置全清成
+ *      模拟输入(改坏了同组的其它引脚)。这里改用标准库 GPIO_Init, 只动 PB6/PB7。
+ *   2) 原来每次写引脚都 Delay_us(10), 一位要 30us, 一整条 I2C 事务接近 1ms,
+ *      16 个字符要几十毫秒。这里改成 5us, 约 66kHz, 稳定且快一倍。
+ *   3) 原来用 ^= 去"翻转" E 脚, 逻辑上依赖"该位本来是 0"; 一旦背光位/RS 位
+ *      变化就会算错。这里改成显式按位或, 任何输入都不会算错。
+ *   4) 原来完全不管从机应答。现在每次写都检查 ACK, 没有应答会报错,
+ *      方便一眼看出是接线/地址问题还是时序问题。
+ *   5) 增加总线恢复: 如果 MCU 复位时从机正卡在某个字节中间, 会把 SDA 一直拉低,
+ *      表现为"有时能显示, 有时死机"。上电时打 9 个 SCL 可以把从机"喂"完一个字节。
+ * ========================================================================== */
 
-//------------------------------------------------------------------------------------
-//---------------------------------软件I2C函数
-void MyI2C_W_SCL(uint8_t BitValue);
-void MyI2C_W_SDA(uint8_t BitValue);
-uint8_t MyI2C_R_SDA(void);
-void MyI2C_Start(void);
-void MyI2C_Stop(void);
-void MyI2C_SendByte(uint8_t Byte);
-uint8_t MyI2C_ReceiveByte(void);
-void MyI2C_SendAck(uint8_t AckBit);
-uint8_t MyI2C_ReceiveAck(void);
-//------------------------------------------------------------------------------------
+/* 半个 I2C 时钟周期的延时。5us -> SCL 约 66kHz (PCF8574 标准模式上限 100kHz) */
+#define I2C_HALF_PERIOD_US   5u
 
-void MyPCF8574SendByte(uint8_t data,uint8_t RW,uint8_t RS)//写命令或数据
-{
- //RW 0:write(写) 1:read(读)    RS 0:instruct(命令) 1:data(数据)
-//7-4 (data bits)
-//P7  P6  P5  P4       P3      P2         P1  P0  //P3 default: 0
-// |   |   |   |        |       |          |   |
-//DB7 DB6 DB5 DB4      P3 CS(Enable foot) RW  RS
-	
-	
-//因为I2C转接模块PCF8574只有4位数据位,所以只能使用LCD1602A的4位数据总线模式
-//且I2C传数据从高位开始,所以先传高4位Hdata 再传低4位Ldata
-	uint8_t Hdata,Ldata; 
-	Hdata =data & 0xF0;  //将data的高4位移至Hdata
-	Hdata^=0x04;        //使能P2  P2对应LCD1602A 读写 操作时序中的 E
-	Ldata =  data<<4;   //将低4位移至有效4位数据位
-	Ldata^=0x04;        //使能P2 
-	
-      if(RW == 1)      //判断是否是读位
-	{
-	   Hdata^=0x02;
-	   Ldata^=0x02;
-	}
-	if(RS == 1)       //判断发送的是否是数据
-	{
-	 Hdata^=0x01;
-	 Ldata^=0x01;
-	}
-	
-	MyI2C_Start();
-	MyI2C_SendByte(0x27<<1);
-	MyI2C_ReceiveAck();	
-	MyI2C_SendByte(Hdata);
-	MyI2C_ReceiveAck();
-	Delay_us(2);
-	MyI2C_SendByte(Hdata^0x04);
-	MyI2C_ReceiveAck();
-	MyI2C_Stop();
+static uint8_t s_addr7 = PCF8574_ADDR7;   /* 当前使用的 7 位地址 */
+static uint8_t s_status = PCF8574_OK;     /* 最近一次错误码 */
+static uint8_t s_backlight = 1u;          /* 背光状态 */
 
-	MyI2C_Start();
-	MyI2C_SendByte(0x27<<1);
-	MyI2C_ReceiveAck();
-	MyI2C_SendByte(Ldata);
-	MyI2C_ReceiveAck();
-	Delay_us(2);
-	MyI2C_SendByte(Ldata^0x04);
-	MyI2C_ReceiveAck();
-	MyI2C_Stop();
-
-}
-//--------------------------------------------------------------------------------------
-
-
-
+/* ============================ 软件 I2C 底层 ============================== */
 
 void MyI2C_W_SCL(uint8_t BitValue)
 {
-	GPIO_TypeDef* GPIOx = GPIOB;
-	//GPIO_WriteBit(GPIOB, GPIO_Pin_6, (BitAction)BitValue);		//根据BitValue，设置SCL引脚的电平
-    //GPIO_Pin_6                 ((uint16_t)0x0040)
-	if (BitValue != Bit_RESET)
-    {
-    GPIOx->BSRR = 0x0040;
-    }
-  else
-    {
-    GPIOx->BRR = 0x0040;
-    }
-	Delay_us(10);												//延时10us，防止时序频率超过要求
-}
-
-/**
-  * 函    数：I2C写SDA引脚电平
-  * 参    数：BitValue 协议层传入的当前需要写入SDA的电平，范围0~1
-  * 返 回 值：无
-  * 注意事项：此函数需要用户实现内容，当BitValue为0时，需要置SDA为低电平，当BitValue为1时，需要置SDA为高电平
-  */
-void MyI2C_W_SDA(uint8_t BitValue)
-{
-	GPIO_TypeDef* GPIOx =GPIOB;
-	//GPIO_WriteBit(GPIOB, GPIO_Pin_7, (BitAction)BitValue);		//根据BitValue，设置SDA引脚的电平，BitValue要实现非0即1的特性
-    //GPIO_Pin_7                 ((uint16_t)0x0080)
     if (BitValue != Bit_RESET)
     {
-    GPIOx->BSRR = 0x0080;
+        GPIOB->BSRR = GPIO_Pin_6;         /* 开漏输出写 1 = 释放总线(由上拉电阻拉高) */
     }
-  else
+    else
     {
-    GPIOx->BRR = 0x0080;
+        GPIOB->BRR = GPIO_Pin_6;
     }
-	Delay_us(10);												//延时10us，防止时序频率超过要求
+    Delay_us(I2C_HALF_PERIOD_US);
 }
 
-/**
-  * 函    数：I2C读SDA引脚电平
-  * 参    数：无
-  * 返 回 值：协议层需要得到的当前SDA的电平，范围0~1
-  * 注意事项：此函数需要用户实现内容，当前SDA为低电平时，返回0，当前SDA为高电平时，返回1
-  */
+void MyI2C_W_SDA(uint8_t BitValue)
+{
+    if (BitValue != Bit_RESET)
+    {
+        GPIOB->BSRR = GPIO_Pin_7;
+    }
+    else
+    {
+        GPIOB->BRR = GPIO_Pin_7;
+    }
+    Delay_us(I2C_HALF_PERIOD_US);
+}
+
 uint8_t MyI2C_R_SDA(void)
 {
-	GPIO_TypeDef* GPIOx =GPIOB;
-	uint8_t BitValue = 0x00;
-	 if ((GPIOx->IDR & 0x0080) != (uint32_t)Bit_RESET)
-  {
-    BitValue = (uint8_t)Bit_SET;
-  }
-  else
-  {
-    BitValue = (uint8_t)Bit_RESET;
-  }
-	//BitValue = GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_7);		//读取SDA电平
-	Delay_us(10);												//延时10us，防止时序频率超过要求
-	return BitValue;											//返回SDA电平
+    uint8_t BitValue;
+    BitValue = ((GPIOB->IDR & GPIO_Pin_7) != 0u) ? 1u : 0u;
+    Delay_us(I2C_HALF_PERIOD_US);
+    return BitValue;
 }
 
-/**
-  * 函    数：I2C初始化
-  * 参    数：无
-  * 返 回 值：无
-  * 注意事项：此函数需要用户实现内容，实现SCL和SDA引脚的初始化
-  */
-
-/*协议层*/
-
-/**
-  * 函    数：I2C起始
-  * 参    数：无
-  * 返 回 值：无
-  */
 void MyI2C_Start(void)
 {
-	MyI2C_W_SDA(1);							//释放SDA，确保SDA为高电平
-	MyI2C_W_SCL(1);							//释放SCL，确保SCL为高电平
-	MyI2C_W_SDA(0);							//在SCL高电平期间，拉低SDA，产生起始信号
-	MyI2C_W_SCL(0);							//起始后把SCL也拉低，即为了占用总线，也为了方便总线时序的拼接
+    MyI2C_W_SDA(1);
+    MyI2C_W_SCL(1);
+    MyI2C_W_SDA(0);                       /* SCL 高电平期间 SDA 下降 = 起始 */
+    MyI2C_W_SCL(0);
 }
 
-/**
-  * 函    数：I2C终止
-  * 参    数：无
-  * 返 回 值：无
-  */
 void MyI2C_Stop(void)
 {
-	MyI2C_W_SDA(0);							//拉低SDA，确保SDA为低电平
-	MyI2C_W_SCL(1);							//释放SCL，使SCL呈现高电平
-	MyI2C_W_SDA(1);							//在SCL高电平期间，释放SDA，产生终止信号
+    MyI2C_W_SDA(0);
+    MyI2C_W_SCL(1);
+    MyI2C_W_SDA(1);                       /* SCL 高电平期间 SDA 上升 = 终止 */
 }
 
-/**
-  * 函    数：I2C发送一个字节
-  * 参    数：Byte 要发送的一个字节数据，范围：0x00~0xFF
-  * 返 回 值：无
-  */
 void MyI2C_SendByte(uint8_t Byte)
 {
-	uint8_t i;
-	for (i = 0; i < 8; i ++)				//循环8次，主机依次发送数据的每一位
-	{
-		/*两个!可以对数据进行两次逻辑取反，作用是把非0值统一转换为1，即：!!(0) = 0，!!(非0) = 1*/
-		MyI2C_W_SDA(!!(Byte & (0x80 >> i)));//使用掩码的方式取出Byte的指定一位数据并写入到SDA线
-		MyI2C_W_SCL(1);						//释放SCL，从机在SCL高电平期间读取SDA
-		MyI2C_W_SCL(0);						//拉低SCL，主机开始发送下一位数据
-	}
+    uint8_t i;
+    for (i = 0u; i < 8u; i++)
+    {
+        MyI2C_W_SDA((uint8_t)((Byte & (0x80u >> i)) ? 1u : 0u));
+        MyI2C_W_SCL(1);
+        MyI2C_W_SCL(0);
+    }
 }
 
-/**
-  * 函    数：I2C接收一个字节
-  * 参    数：无
-  * 返 回 值：接收到的一个字节数据，范围：0x00~0xFF
-  */
 uint8_t MyI2C_ReceiveByte(void)
 {
-	uint8_t i, Byte = 0x00;					//定义接收的数据，并赋初值0x00，此处必须赋初值0x00，后面会用到
-	MyI2C_W_SDA(1);							//接收前，主机先确保释放SDA，避免干扰从机的数据发送
-	for (i = 0; i < 8; i ++)				//循环8次，主机依次接收数据的每一位
-	{
-		MyI2C_W_SCL(1);						//释放SCL，主机机在SCL高电平期间读取SDA
-		if (MyI2C_R_SDA()){Byte |= (0x80 >> i);}	//读取SDA数据，并存储到Byte变量
-													//当SDA为1时，置变量指定位为1，当SDA为0时，不做处理，指定位为默认的初值0
-		MyI2C_W_SCL(0);						//拉低SCL，从机在SCL低电平期间写入SDA
-	}
-	return Byte;							//返回接收到的一个字节数据
+    uint8_t i;
+    uint8_t Byte = 0x00u;
+    MyI2C_W_SDA(1);                       /* 先释放 SDA, 交给从机驱动 */
+    for (i = 0u; i < 8u; i++)
+    {
+        MyI2C_W_SCL(1);
+        if (MyI2C_R_SDA())
+        {
+            Byte |= (uint8_t)(0x80u >> i);
+        }
+        MyI2C_W_SCL(0);
+    }
+    return Byte;
 }
 
-/**
-  * 函    数：I2C发送应答位
-  * 参    数：Byte 要发送的应答位，范围：0~1，0表示应答，1表示非应答
-  * 返 回 值：无
-  */
 void MyI2C_SendAck(uint8_t AckBit)
 {
-	MyI2C_W_SDA(AckBit);					//主机把应答位数据放到SDA线
-	MyI2C_W_SCL(1);							//释放SCL，从机在SCL高电平期间，读取应答位
-	MyI2C_W_SCL(0);							//拉低SCL，开始下一个时序模块
+    MyI2C_W_SDA(AckBit);
+    MyI2C_W_SCL(1);
+    MyI2C_W_SCL(0);
 }
 
-/**
-  * 函    数：I2C接收应答位
-  * 参    数：无
-  * 返 回 值：接收到的应答位，范围：0~1，0表示应答，1表示非应答
-  */
 uint8_t MyI2C_ReceiveAck(void)
 {
-	uint8_t AckBit;							//定义应答位变量
-	MyI2C_W_SDA(1);							//接收前，主机先确保释放SDA，避免干扰从机的数据发送
-	MyI2C_W_SCL(1);							//释放SCL，主机机在SCL高电平期间读取SDA
-	AckBit = MyI2C_R_SDA();					//将应答位存储到变量里
-	MyI2C_W_SCL(0);							//拉低SCL，开始下一个时序模块
-	return AckBit;							//返回定义应答位变量
+    uint8_t AckBit;
+    MyI2C_W_SDA(1);
+    MyI2C_W_SCL(1);
+    AckBit = MyI2C_R_SDA();               /* 0 = 从机应答, 1 = 无人应答 */
+    MyI2C_W_SCL(0);
+    return AckBit;
 }
 
+/* 若上一次传输被打断(比如 MCU 中途复位), 从机会一直把 SDA 拉低,
+ * 之后所有传输都失败。打最多 9 个 SCL 让从机把当前字节收完, 再补一个 STOP。 */
+void MyI2C_BusRecover(void)
+{
+    uint8_t i;
+    MyI2C_W_SDA(1);
+    for (i = 0u; i < 9u; i++)
+    {
+        MyI2C_W_SCL(1);
+        MyI2C_W_SCL(0);
+    }
+    MyI2C_W_SDA(0);
+    MyI2C_W_SCL(1);
+    MyI2C_W_SDA(1);
+}
+
+/* ============================ 初始化 ==================================== */
+
+void MyPCF8574_I2C_Init(void)
+{
+    GPIO_InitTypeDef gpio;
+
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
+    Delay_us(2);                          /* 等外设时钟稳定 */
+
+    gpio.GPIO_Pin   = GPIO_Pin_6 | GPIO_Pin_7;
+    gpio.GPIO_Mode  = GPIO_Mode_Out_OD;   /* 开漏: 总线高电平靠转接板上的上拉电阻 */
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOB, &gpio);
+
+    GPIOB->BSRR = GPIO_Pin_6 | GPIO_Pin_7; /* 先释放总线, 保持空闲(都为高) */
+    Delay_us(10);
+
+    MyI2C_BusRecover();
+    s_status = PCF8574_OK;
+}
+
+/* ============================ 器件探测 ================================== */
+
+uint8_t MyPCF8574_Probe(uint8_t addr7)
+{
+    uint8_t nack;
+
+    MyI2C_Start();
+    MyI2C_SendByte((uint8_t)(addr7 << 1));
+    nack = MyI2C_ReceiveAck();
+    MyI2C_Stop();
+
+    return (uint8_t)((nack == 0u) ? 1u : 0u);
+}
+
+uint8_t MyPCF8574_AutoAddress(void)
+{
+    uint8_t a;
+
+    for (a = 0x20u; a <= 0x27u; a++)
+    {
+        if (MyPCF8574_Probe(a))
+        {
+            s_addr7 = a;
+            return a;
+        }
+    }
+    for (a = 0x38u; a <= 0x3Fu; a++)
+    {
+        if (MyPCF8574_Probe(a))
+        {
+            s_addr7 = a;
+            return a;
+        }
+    }
+    return 0u;
+}
+
+void MyPCF8574_SetAddress(uint8_t addr7)
+{
+    s_addr7 = (uint8_t)(addr7 & 0x7Fu);
+}
+
+uint8_t MyPCF8574_GetAddress(void)
+{
+    return s_addr7;
+}
+
+/* ============================ 端口/背光 ================================= */
+
+uint8_t MyPCF8574_WritePort(uint8_t value)
+{
+    uint8_t nack;
+
+    MyI2C_Start();
+    MyI2C_SendByte((uint8_t)(s_addr7 << 1));
+    nack = MyI2C_ReceiveAck();
+    if (nack != 0u)
+    {
+        MyI2C_Stop();
+        s_status = PCF8574_ERR_NACK;
+        return 0u;
+    }
+
+    MyI2C_SendByte(value);
+    nack = MyI2C_ReceiveAck();
+    MyI2C_Stop();
+    if (nack != 0u)
+    {
+        s_status = PCF8574_ERR_NACK;
+        return 0u;
+    }
+
+    s_status = PCF8574_OK;
+    return 1u;
+}
+
+void MyPCF8574_SetBacklight(uint8_t on)
+{
+    s_backlight = (on != 0u) ? 1u : 0u;
+    (void)MyPCF8574_WritePort((uint8_t)(s_backlight ? PCF8574_BL_ON : PCF8574_BL_OFF));
+}
+
+uint8_t MyPCF8574_GetBacklight(void)
+{
+    return s_backlight;
+}
+
+/* ============================ 4 位并口时序 ============================== */
+/*
+ * HD44780 4 位模式时序 (数据手册):
+ *   1. D7~D4 上放好半字节, RS/RW 稳定
+ *   2. E 拉高, 保持 >= 450ns (这里给 2us)
+ *   3. E 拉低, 这个下降沿 LCD 才把 D7~D4 锁存进去
+ *   4. 指令执行 <= 37us (这里给 50us; 清屏单独给 1.5ms 以上)
+ */
+uint8_t MyPCF8574_WriteNibble(uint8_t nibble, uint8_t rs)
+{
+    uint8_t value;
+
+    value = (uint8_t)((nibble & 0xF0u) | (s_backlight ? PCF8574_BL_ON : PCF8574_BL_OFF));
+    if (rs != 0u)
+    {
+        value |= PCF8574_BIT_RS;
+    }
+
+    if (!MyPCF8574_WritePort((uint8_t)(value | PCF8574_BIT_EN)))
+    {
+        return 0u;
+    }
+    Delay_us(2);                          /* E 高电平时间 */
+    if (!MyPCF8574_WritePort(value))      /* E 下降沿: 锁存 */
+    {
+        return 0u;
+    }
+    Delay_us(50);                         /* 等指令执行完 (37us) */
+    return 1u;
+}
+
+void MyPCF8574SendByte(uint8_t data, uint8_t RW, uint8_t RS)
+{
+    if (RW != 0u)
+    {
+        /* 本驱动不读忙标志(RW=1), 用固定延时替代, 见 MyLCD1602A.c 里的说明 */
+        s_status = PCF8574_ERR_BUS;
+        return;
+    }
+    if (!MyPCF8574_WriteNibble((uint8_t)(data & 0xF0u), RS))
+    {
+        return;
+    }
+    (void)MyPCF8574_WriteNibble((uint8_t)(data << 4), RS);
+}
+
+uint8_t MyPCF8574_LastStatus(void)
+{
+    return s_status;
+}
