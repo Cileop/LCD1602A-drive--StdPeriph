@@ -11,7 +11,7 @@ void Key_Init(void)
 	GPIO_Init(GPIOA,&GPIOA_KeyInitStruct);
 
 	GPIOA_KeyInitStruct.GPIO_Mode=GPIO_Mode_IPU;
-	GPIOA_KeyInitStruct.GPIO_Pin=GPIO_Pin_4 | GPIO_Pin_5 | GPIO_Pin_6;
+	GPIOA_KeyInitStruct.GPIO_Pin=GPIO_Pin_4 | GPIO_Pin_5 ;
 	GPIOA_KeyInitStruct.GPIO_Speed=GPIO_Speed_50MHz;
 	GPIO_Init(GPIOA,&GPIOA_KeyInitStruct);
 }
@@ -43,6 +43,7 @@ uint8_t KeyGetNum(void)
 		KeyNum = 2;
 			   return KeyNum;
 	       }
+		   /*
 		   else if(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_6) == 0)
 	       {
 	    Delay_ms(20);
@@ -51,6 +52,7 @@ uint8_t KeyGetNum(void)
 		KeyNum = 3;
 			   return KeyNum;
 	       }
+		   */
 		   else{return 0;}
 		}
 	else if(i==2)
@@ -74,6 +76,7 @@ uint8_t KeyGetNum(void)
 		KeyNum = 5;
 			   return KeyNum;
 	       }
+		   /*
 		   else if(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_6) == 0)
 	       {
 	    Delay_ms(20);
@@ -82,6 +85,7 @@ uint8_t KeyGetNum(void)
 		KeyNum = 6;
 			   return KeyNum;
 	       }
+		   */
 		   else{return 0;}
 		}
 	 else if(i==3)
@@ -105,6 +109,7 @@ uint8_t KeyGetNum(void)
 		KeyNum = 8;
 			   return KeyNum;
 	       }
+		   /*
 		   else if(GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_6) == 0)
 	       {
 	    Delay_ms(20);
@@ -113,6 +118,7 @@ uint8_t KeyGetNum(void)
 		KeyNum = 9;
 			   return KeyNum;
 	       }
+		   */
 		   else{return 0;}
 		}
 
