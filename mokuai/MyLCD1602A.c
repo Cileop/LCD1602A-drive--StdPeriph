@@ -239,6 +239,47 @@ void LCD1602A_Backlight(uint8_t on)
     Delay_us(50);
 }
 
+/* ============================ CGRAM / 对比度自检 ======================== */
+
+/* 自定义字符: 写 CGRAM 的 slot 号(0~7), 每个字符 8 行, 每行用低 5 位 */
+void LCD1602A_DefineChar(uint8_t slot, const uint8_t rows[8])
+{
+    uint8_t i;
+
+    if (slot > 7u)
+    {
+        return;
+    }
+    /* 设置 CGRAM 地址: 0x40 | (slot * 8), 然后连续写 8 行点阵 */
+    LCD_WriteByte((uint8_t)(0x40u | (uint8_t)(slot << 3)), 0u);
+    for (i = 0u; i < 8u; i++)
+    {
+        LCD_WriteByte((uint8_t)(rows[i] & 0x1Fu), 1u);
+    }
+}
+
+/* 对比度自检: 第 1 行 16 个实心黑块, 第 2 行 "CONTRAST TEST"。
+ * 判断标准: 黑块应该是"纯黑"的; 如果发灰/发绿、边缘模糊, 说明 V0 偏了。 */
+void LCD1602A_SelfTest(void)
+{
+    uint8_t block[8];
+    uint8_t i;
+
+    for (i = 0u; i < 8u; i++)
+    {
+        block[i] = 0x1Fu;               /* 5 个点全亮 = 实心块 */
+    }
+    LCD1602A_DefineChar(0u, block);
+
+    LCD1602A_Clear();
+    LCD1602A_SetCursor(1u, 1u);
+    for (i = 0u; i < 16u; i++)
+    {
+        LCD1602A_WriteChar('\0');       /* 字符 0 = 刚才定义的实心块 */
+    }
+    LCD1602A_ShowString(2u, 1u, "CONTRAST TEST");
+}
+
 /* ============================ 其它 ====================================== */
 
 uint8_t LCD1602A_LastError(void)

@@ -14,6 +14,11 @@
  *  原来的密码锁界面在文件末尾(注释掉的部分), 驱动调好后再取消注释即可。
  * ========================================================================== */
 
+/* 想看"对比度自检图"时把这里改成 1:
+ * 第 1 行显示 16 个实心黑块, 用来判断 LCD 的"黑"到底能有多黑。
+ * 黑块发灰/发绿 = 对比度(V0)不足, 处理方法见 README.md 的"显示很淡怎么办"。 */
+#define LCD_SHOW_CONTRAST_TEST  0
+
 /* 把 0~65535 转成十进制字符串, 避免引入 printf 增加代码体积 */
 static void U16ToStr(uint16_t value, char *buf)
 {
@@ -42,22 +47,36 @@ static void U16ToStr(uint16_t value, char *buf)
 
 int main(void)
 {
+#if !LCD_SHOW_CONTRAST_TEST
     uint16_t count = 0u;
     char line[17];
+#endif
 
     LCD1602A_Init();
+    LCD1602A_Backlight(0);
+
+#if LCD_SHOW_CONTRAST_TEST
+    /* ============ 模式 A: 对比度自检 ============
+     * 第 1 行 16 个实心黑块, 第 2 行 "CONTRAST TEST"。
+     * 黑块应该是纯黑的; 发灰/边缘模糊 = V0 对比度不足。 */
+    LCD1602A_SelfTest();
+    while (1)
+    {
+    }
+#else
+    /* ============ 模式 B: 正常显示 + 计数器 ============ */
 
     if (LCD1602A_IsPresent() == 0u)
     {
         /* 总线没有应答: 屏幕不会显示任何东西。
-           先按 修复说明.md 里的"硬件排查清单"检查接线、供电、地址。 */
+           先按 README.md 的"硬件排查"检查接线、供电、地址。 */
         LCD1602A_ShowString(1, 1, "NO PCF8574 ACK");
         LCD1602A_ShowString(2, 1, "check SDA/SCL");
         while (1)
         {
         }
     }
-
+    LCD1602A_Clear();
     LCD1602A_ShowString(1, 1, "LCD1602A 4-bit OK");
 
     while (1)
@@ -75,6 +94,7 @@ int main(void)
         count++;
         Delay_ms(500);
     }
+#endif
 }
 
 /* ============================================================================

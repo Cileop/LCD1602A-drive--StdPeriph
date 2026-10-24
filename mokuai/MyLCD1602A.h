@@ -31,8 +31,18 @@ void    LCD1602A_WriteString(const char *str);
 /* 从(row,col)开始写一整行, 不足 16 字符用空格补齐, 避免留下残影 */
 void    LCD1602A_ShowString(uint8_t row, uint8_t col, const char *str);
 
-/* 背光开关 (0/1)。如果亮灭是反的, 改 MyPCF8574.h 里的 PCF8574_BL_ACTIVE_HIGH */
+/* 背光开关 (0/1)。如果亮灭是反的, 改 MyPCF8574.h 里的 PCF8574_BL_ACTIVE_HIGH
+ * 注意: 有些模块的背光是硬件常亮的(不经过 P3 三极管), 此时本函数不起作用。 */
 void    LCD1602A_Backlight(uint8_t on);
+
+/* 自定义字符: 把 8 行点阵写进 CGRAM 的 slot(0~7), 之后写字符 slot 即可显示。
+ * rows[i] 只用低 5 位 (bit4..bit0 = 从左到右 5 个点)。 */
+void    LCD1602A_DefineChar(uint8_t slot, const uint8_t rows[8]);
+
+/* 对比度自检图: 第 1 行显示 16 个"实心黑块", 第 2 行显示 "CONTRAST TEST"。
+ * 黑块不够黑 / 边缘发灰, 说明对比度(V0)不足 —— 这是纯模拟问题, 软件调不了,
+ * 详见 README.md 的"显示很淡怎么办"。 */
+void    LCD1602A_SelfTest(void);
 
 /* 发一条原始指令(给需要自定义的用户) */
 void    LCD1602A_Command(uint8_t cmd);
