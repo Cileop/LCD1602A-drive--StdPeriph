@@ -1,0 +1,27 @@
+# ---------------- Keil MDK 构建产物 ----------------
+# 这些文件每次编译都会变，不应该进仓库（clone 后 Keil 会自动重新生成）
+Objects/
+Listings/
+*.o
+*.obj
+*.axf
+*.crf
+*.d
+*.dep
+*.lnp
+*.map
+*.lst
+*.sct
+*.htm
+*.iex
+*.build_log.htm
+*.bak
+
+# ---------------- Keil 每用户界面布局 ----------------
+# 含 Windows 用户名 / 窗口位置，每个人都不一样
+*.uvguix.*
+
+# ---------------- 编辑器 / 系统杂物 ----------------
+.vscode/
+.DS_Store
+Thumbs.db
